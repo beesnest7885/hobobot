@@ -1,0 +1,477 @@
+import discord
+from discord.ext import commands
+import random
+import os
+import asyncio
+import sys
+import json
+from discord.ext import tasks
+from random import randint
+
+
+
+intents = discord.Intents.default()
+intents.reactions = True
+intents.messages = True
+intents.guilds = True
+intents.message_content = True
+bot = commands.Bot(command_prefix='.', intents=intents)
+
+TOKEN = os.getenv('DISCORD_TOKEN')
+
+if not TOKEN:
+    raise ValueError("DISCORD_TOKEN environment variable not set or is empty.")
+
+
+def load_scoreboard():
+    try:
+        with open('scoreboard.json', 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+# Load player_scores when the bot starts
+player_scores = load_scoreboard()
+score_lock = asyncio.Lock()
+current_word = None
+
+def save_scoreboard():
+    # Validate data before saving
+    validate_data_before_saving(player_scores)
+    try:
+        with open('scoreboard.json', 'w') as f:
+            json.dump(player_scores, f, indent=4)
+    except Exception as e:
+        print(f"Error while saving scoreboard: {e}")
+
+
+
+def validate_data_before_saving(data):
+    seen = set()
+    for key in data:
+        if key in seen:
+            print(f"Duplicate key detected: {key}")
+            # Handle duplicate here, e.g., merge data or remove the duplicate
+        else:
+            seen.add(key)
+
+        
+random_words = ['flux', 'quantum', 'hoverboard', 'nebula', 'warp', 'cyber', 'android', 'nano', 'fusion', 'laser']
+futuristic_hobo_items = [
+    "Quantum Tent",
+    "Nano-Campfire",
+    "HoverCarriage",
+    "HoboBot Assistant",
+    "Warp-Travel Blanket",
+    "Laser Can Opener",
+    "Anti-Gravity Boots",
+    "CyberStick",
+    "Photon Harmonica",
+    "Magnetic Cup"
+]
+
+
+hobo_names = [
+    "HoboJoe", "HoboJack", "HoboSam", "HoboMax", "HoboBilly", 
+    "HoboLuke", "HoboMike", "HoboSteve", "HoboToby", "HoboWill", 
+    "HoboEd", "HoboClyde", "HoboGeorge", "HoboRoy", "HoboClarence"
+]
+
+good_events = [
+    "found a shortcut and advanced a position",
+    "rode a fast-moving trolley and advanced",
+    #... add more good events
+]
+
+neutral_events = [
+    "found a gold coin", "got a new shoe", "ate a delicious sandwich", 
+    "discovered a hidden map", "found a lucky rabbit's foot", 
+    "met a friendly stray dog", "stumbled upon a street festival", 
+    "found a $5 bill", "picked up a working radio", "got gifted a warm blanket" 
+
+]
+bad_events = [
+    "got caught by the police", "fell into a ditch", "got attacked by a dog", 
+    "lost their map to the wind", "got their shoe stolen", 
+    "had their food spoiled", "got drenched in a sudden rain", 
+    "lost their lucky charm", "got chased by a street gang" 
+
+]
+
+padding_texts = [
+    "The race intensifies as our hobos push forward. On to the next round!",
+    "Our racers are giving it their all. Who will emerge victorious?",
+    "The excitement is palpable! The crowd is cheering for their favorite hobo!",
+    "Tensions rise as the hobos jostle for position. Every step counts!",
+    "Some stumble, some triumph, but the race is far from over!"
+]
+
+
+
+
+
+# Remove the default help command so we can add our own
+bot.remove_command('help')
+
+@bot.event
+async def on_ready():
+    print(f'We have logged in as {bot.user}')
+    load_scoreboard()
+    word_event.start()  # Start the task once the bot is ready
+
+@bot.command()
+async def help(ctx):
+    embed = discord.Embed(title="Hobo Racing Game Help", description="A list of all available commands for the Hobo Racing game.", color=0x00ff00)
+    embed.add_field(name=".race", value="Start a new hobo race. React to the message to join the race.", inline=False)
+    embed.add_field(name=".challenge", value="Single player against bots - work in progress", inline=False)
+    embed.add_field(name=".score [user]", value="View the number of wins of the specified user. If no user is mentioned, it shows your wins.", inline=False)
+    embed.add_field(name=".leaderboard", value="View the top racers on the leaderboard.", inline=False)
+    embed.add_field(name=".help", value="Show this help message.", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        embed = discord.Embed(
+            title="Error!",
+            description="Unknown command. Use `.help` for a list of commands.",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
+
+
+@bot.command()
+async def race(ctx):
+    embed = discord.Embed(title="Hobo Race!", description="A new race is starting! React with ❤️ to join within the next 20 seconds!", color=0x00ff00)
+    msg = await ctx.send(embed=embed)
+    await msg.add_reaction('❤️')
+
+    await asyncio.sleep(20)
+    msg = await ctx.channel.fetch_message(msg.id)
+
+    players = []
+    for reaction in msg.reactions:
+        if reaction.emoji == '❤️':
+            async for user in reaction.users():
+                if user != bot.user:
+                    players.append({"user": user, "name": random.choice(hobo_names)})
+
+    participants_list = "\n".join([f"{player['user'].mention} as {player['name']}" for player in players])
+    embed = discord.Embed(title="Racers List", description=participants_list, color=0xffa500)
+    await ctx.send(embed=embed)
+
+    positions = {player['user']: len(players) - index for index, player in enumerate(players)}
+
+    while len(players) > 1:
+        events_for_round = []  # Initialize it here at the start of each round
+    for player in players[:]:  # Iterate over a copy to avoid index issues
+        event_chance = random.randint(1, 14)
+        user_id = player['user'].id
+
+        if event_chance <= 2:  # Bad event
+            bad_event = random.choice(bad_events)
+            events_for_round.append(f"{player['name']} ({player['user'].mention}): {bad_event}")
+            players.remove(player)
+        elif 2 < event_chance <= 4:  # Good event
+            good_event = random.choice(good_events)
+            events_for_round.append(f"{player['name']}: {good_event}")
+
+            if players.index(player) != 0:
+                idx = players.index(player)
+                players[idx], players[idx - 1] = players[idx - 1], players[idx]
+                positions[player['user']], positions[players[idx]['user']] = positions[players[idx]['user']], positions[player['user']]
+        else:  # Neutral event
+            neutral_event = random.choice(neutral_events)
+            events_for_round.append(f"{player['name']}: {neutral_event}")
+
+    embed = discord.Embed(title=random.choice(padding_texts), description="\n".join(events_for_round), color=0x87ceeb)
+    await ctx.send(embed=embed)
+    await asyncio.sleep(5)
+
+    if players:
+        winner = players[0]['user']
+        winner_id = winner.id
+        async with score_lock:  
+            if winner_id not in player_scores:
+                player_scores[winner_id] = {
+                    "race": {"wins": 0, "losses": 0},
+                    "challenge": {"wins": 0, "losses": 0},
+                    "inventory": {},
+                    "sandwich_tokens": 0
+                }
+            
+            # Update winner's race wins
+            player_scores[winner_id]["race"]["wins"] += 1
+
+            # Update the race losses for every other participant
+            for player in positions.keys():  
+                if player != winner: 
+                    if player.id not in player_scores:
+                        player_scores[player.id] = {"race": {"wins": 0, "losses": 0}, "challenge": {"wins": 0, "losses": 0}}
+                    player_scores[player.id]["race"]["losses"] += 1
+
+            save_scoreboard()
+
+            embed = discord.Embed(title="Winner!", description=f"**Congratulations {winner.mention}! You are the winner!**", color=0xffff00)
+            await ctx.send(embed=embed)
+    else:
+        embed = discord.Embed(title="Race Result", description="**It seems there were no winners this time!**", color=0xff0000)
+        await ctx.send(embed=embed)
+
+    sorted_positions = sorted(positions.items(), key=lambda x: x[1])
+    winners = [f"🥇 {sorted_positions[0][0].mention}",
+               f"🥈 {sorted_positions[1][0].mention}" if len(sorted_positions) > 1 else None,
+               f"🥉 {sorted_positions[2][0].mention}" if len(sorted_positions) > 2 else None]
+
+    winners = [winner for winner in winners if winner]
+    embed = discord.Embed(title="Top Performers", description=f"Congratulations {' '.join(winners)}!", color=0xffd700)
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+async def score(ctx, member: discord.Member = None):
+    async with score_lock:
+        if not member:
+            member = ctx.author
+
+        race_wins = player_scores.get(member.id, {}).get("race", {}).get("wins", 0)
+        race_losses = player_scores.get(member.id, {}).get("race", {}).get("losses", 0)
+
+        challenge_wins = player_scores.get(member.id, {}).get("challenge", {}).get("wins", 0)
+        challenge_losses = player_scores.get(member.id, {}).get("challenge", {}).get("losses", 0)
+
+        embed = discord.Embed(title="Race & Challenge Results", color=0x87ceeb)
+        embed.add_field(name="Race Stats", value=f"Wins: {race_wins}\nLosses: {race_losses}", inline=True)
+        embed.add_field(name="Challenge Stats", value=f"Wins: {challenge_wins}\nLosses: {challenge_losses}", inline=True)
+
+        await ctx.send(embed=embed)
+
+
+@bot.command()
+async def leaderboard(ctx):
+    async with score_lock:
+        try:
+            if not player_scores:
+                await ctx.send("The leaderboard is currently empty!")
+                return
+            
+            leaderboard_output = sorted(player_scores.items(), key=lambda x: (x[1]["race"]["wins"] + x[1]["challenge"]["wins"]), reverse=True)
+            
+            embed_description = ""
+            for player_id, scores in leaderboard_output:
+                member = await ctx.guild.fetch_member(player_id)
+                race_stats = f"Race - Wins: {scores['race']['wins']}, Losses: {scores['race']['losses']}"
+                challenge_stats = f"Challenge - Wins: {scores['challenge']['wins']}, Losses: {scores['challenge']['losses']}"
+                if member:
+                    embed_description += f"{member.mention}\n{race_stats}\n{challenge_stats}\n\n"
+                else:
+                    embed_description += f"User ID {player_id} (not in the server)\n{race_stats}\n{challenge_stats}\n\n"
+
+            embed = discord.Embed(title="Leaderboard", description=embed_description, color=0x00ff00)
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            await ctx.send(f"Error: {e}")
+
+
+
+difficulty_level = 1  # Start with level 1 difficulty
+
+@bot.command()
+async def challenge(ctx):
+    global difficulty_level
+    
+    # Ensure minimum difficulty level is 1
+    difficulty_level = max(1, difficulty_level)
+    
+    user = ctx.author
+    user_id = user.id  # Get the user's ID for easy reference
+    computer_hobos_count = 3 + difficulty_level  # Start with fewer hobos
+
+    players = [{"user": user, "name": random.choice(hobo_names)}]
+    for i in range(computer_hobos_count):
+        players.append({"user": f"ComputerHobo{i}", "name": random.choice(hobo_names)})
+
+    participants_list = "\n".join([f"{player['user']} as {player['name']}" for player in players])
+
+    # Embedding the racer list
+    embed_title = f"Racers List - Difficulty Level {difficulty_level}"
+    embed = discord.Embed(title=embed_title, description=participants_list, color=0x87ceeb)
+    await ctx.send(embed=embed)
+
+    while len(players) > 1 and any(p['user'] == user for p in players):
+        events_for_round = []
+        for player in players[:]:  # Start of for loop
+            event_chance = random.randint(1, 10 + difficulty_level)  # Adjust event chance based on difficulty level
+
+            # User gets slightly better odds than computer hobos
+            if player['user'] == user:
+                if event_chance <= 0:  # Bad event
+                    bad_event = random.choice(bad_events)
+                    events_for_round.append(f"{player['name']} ({player['user'].mention}): {bad_event}")
+                    players.remove(player)
+                elif 1 < event_chance <= 6:  # Good event
+                    good_event = random.choice(good_events)
+                    events_for_round.append(f"{player['name']} ({player['user'].mention}): {good_event}")
+
+                    if players.index(player) != 0:
+                        idx = players.index(player)
+                        players[idx], players[idx - 1] = players[idx - 1], players[idx]
+                else:  # Neutral event
+                    neutral_event = random.choice(neutral_events)
+                    events_for_round.append(f"{player['name']} ({player['user'].mention}): {neutral_event}")
+            else:  # Logic for computer hobos
+                if event_chance <= 3:  # Bad event
+                    bad_event = random.choice(bad_events)
+                    events_for_round.append(f"{player['name']} ({player['user']}): {bad_event}")
+                    players.remove(player)
+                elif 2 < event_chance <= 4 + difficulty_level:  # Good event
+                    good_event = random.choice(good_events)
+                    events_for_round.append(f"{player['name']} ({player['user']}): {good_event}")
+
+                    if players.index(player) != 0:
+                        idx = players.index(player)
+                        players[idx], players[idx - 1] = players[idx - 1], players[idx]
+                else:  # Neutral event
+                    neutral_event = random.choice(neutral_events)
+                    events_for_round.append(f"{player['name']} ({player['user']}): {neutral_event}")
+        # End of for loop
+
+        embed = discord.Embed(title="Race Update", description="\n".join(events_for_round), color=0x87ceeb)
+        await ctx.send(embed=embed)
+        await asyncio.sleep(5)
+
+    print([p['name'] for p in players]) 
+
+    
+
+    # Check if user is still in the game or is the only one left
+    print("Checking win condition...") 
+    if any(p['user'] == user for p in players) or len(players) == 1:
+        print("User is a winner!")
+        
+        # Increase the difficulty level
+        difficulty_level += 1
+
+        # Ensure user's score structure is initialized
+        if user_id not in player_scores:
+            player_scores[user_id] = {
+                "race": {"wins": 0, "losses": 0},
+                "challenge": {"wins": 0, "losses": 0},
+                "inventory": {},
+                "sandwich_tokens": 0
+            }
+
+        try:
+            reward = randint(10, 100)
+            player_scores[user_id]["sandwich_tokens"] += reward
+        except Exception as e:
+            print(f"Error while adding reward: {e}")
+
+        # Construct a "Winner" embed
+        embed = discord.Embed(title="Winner!", description=f"**Congratulations! You've been rewarded with {reward} sandwich tokens. Can you go another round?**", color=0x00ff00)
+        await ctx.send(embed=embed)
+        
+    else:
+        print("User lost!")
+        ...
+
+    # Optionally, save the updated scores to the file
+    save_scoreboard()  # Uncomment if you have this function set up
+
+
+@bot.command(name="shutdown")
+async def shutdown(ctx):
+    """Shutdown the bot"""
+    await ctx.send("Shutting down...")
+    await bot.close()
+    sys.exit(0)
+
+
+
+@tasks.loop(seconds=120)  # This will wait an average of 2 minutes, adjust as necessary
+async def word_event():
+    global current_word
+    channel = bot.get_channel(1006296186828902421)  # Replace with the ID of your specific channel
+    current_word = random.choice(random_words)
+    embed = discord.Embed(title="Word Challenge", description=f"First one to type the word **{current_word}** wins!", color=0x00ff00)
+    await channel.send(embed=embed)
+    await asyncio.sleep(random.randint(3600, 10800))  # Sleeps for 1-3 hours
+
+ 
+@bot.event
+async def on_message(message):
+    if message.channel.id == 1006296186828902421 and message.content == current_word:
+        user_id = str(message.author.id)
+        item_won = random.choice(futuristic_hobo_items)
+        sandwiches_earned = random.randint(10, 100)
+        
+        async with score_lock:
+    # Check if user's score data exists, if not, initialize it
+            if user_id not in player_scores:
+                player_scores[user_id] = {
+                    "race": {"wins": 0, "losses": 0},
+                    "challenge": {"wins": 0, "losses": 0},
+                    "inventory": {},
+                    "sandwich_tokens": 0
+                }
+
+            user_data = player_scores[user_id]
+
+            # Increment the sandwich tokens
+            current_tokens = user_data.get("sandwich_tokens", 0)
+            user_data["sandwich_tokens"] = current_tokens + sandwiches_earned
+
+            # Ensure inventory exists
+            if "inventory" not in user_data:
+                user_data["inventory"] = {}
+
+            # Add the item to the user's inventory
+            if item_won not in user_data["inventory"]:
+                user_data["inventory"][item_won] = 1
+            else:
+                user_data["inventory"][item_won] += 1
+                
+            # Save the updated scores and inventory to the file
+            save_scoreboard()
+
+        # Inform the player about the won item
+        embed = discord.Embed(title="Congratulations!", description=f"You've won a **{item_won}**, You've also earned {sandwiches_earned} sandwich tokens!", color=0xffff00)
+        await message.channel.send(embed=embed)
+
+    # Ensure other commands are still processed
+    await bot.process_commands(message)
+
+
+    
+@bot.command(name='items')
+async def show_items(ctx):
+    async with score_lock:
+        user_id = str(ctx.author.id)  # Convert the ID to string
+        print(f"Fetching items for user: {user_id}")  # Debug print
+
+        if user_id not in player_scores:
+            print(f"No data found for user: {user_id}")  # Debug print
+            embed = discord.Embed(title="Inventory", description="You have no items in your inventory.", color=0xff0000)
+        else:
+            description = f"Sandwich Tokens: {player_scores[user_id]['sandwich_tokens']}\n\n"
+            for item in futuristic_hobo_items:
+                count = player_scores[user_id]["inventory"].get(item, 0)
+                if count:
+                    description += f"✅ {item} x{count}\n"
+                else:
+                    description += f"❌ {item}\n"
+            
+            embed = discord.Embed(title="Hover Kart", description=description, color=0x00ff00)
+        await ctx.send(embed=embed)
+
+
+
+
+
+
+
+
+
+    
+bot.run(TOKEN)
